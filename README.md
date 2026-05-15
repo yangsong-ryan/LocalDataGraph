@@ -1,6 +1,6 @@
 # DataWorks 血缘影子中枢 (Shadow Lineage Hub)
 
-补全 DataWorks 官方血缘无法识别的隐性依赖（API 调用、跨库触发等），通过可视化界面手动构建增强血缘图，并提供 MCP 接口供 AI 助手进行影响分析和溯源。
+补全 DataWorks 官方血缘无法识别的隐性依赖（API 调用、跨库触发等），通过可视化界面手动构建增强血缘图。
 
 ## 快速开始
 
@@ -44,13 +44,15 @@ npm start
 - 鼠标按住节点边缘圆点，拖拽到目标节点即可直接连线（无弹窗）
 - 连线样式为平滑折线（smoothstep），带箭头
 
-### 自动布局
+### 撤回 / 重做
 
-点击 **「自动布局」**，使用 Dagre 算法按从左到右的拓扑顺序排列节点。
+- 工具栏 **↩** **↪** 按钮，或快捷键 **Ctrl+Z** / **Ctrl+Shift+Z**
+- 支持撤回：新增节点、删除节点、连线、编辑、拖拽位置等操作
+- 最多保留 50 步历史
 
 ### 保存
 
-点击 **「保存」** 将当前画布的全量数据写入 `graph.json`。状态栏会显示保存结果。
+点击 **「保存」** 弹出确认对话框，确认后将当前画布的全量数据写入 `graph.json`。
 
 ## API 接口
 
@@ -130,7 +132,8 @@ LocalDataGraph/
 │   ├── api.js                  # 前端请求层
 │   └── components/
 │       ├── CustomNode.jsx      # 自定义节点（四边 Handle + 编辑弹窗）
-│       ├── GraphEditor.jsx     # React Flow 编辑器
+│       ├── GraphEditor.jsx     # React Flow 编辑器（undo/redo + 保存确认）
+│       ├── Logo.jsx            # SVG 呼吸灯 Logo
 │       └── TabBar.jsx          # 多画布 Tab 栏
 └── dist/                       # 构建产物（npm run build 生成）
 ```
@@ -140,5 +143,4 @@ LocalDataGraph/
 | 层 | 技术 |
 |----|------|
 | 前端 | Vite + React + @xyflow/react |
-| 布局 | Dagre（左→右拓扑排序） |
 | 后端 | Express（轻量级，无数据库） |

@@ -12,7 +12,6 @@
   "dependencies": {
     "@xyflow/react": "^12.6.0",
     "cors": "^2.8.5",
-    "dagre": "^0.8.5",
     "express": "^4.21.0"
   },
   "devDependencies": {
