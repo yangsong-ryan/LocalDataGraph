@@ -51,22 +51,6 @@
   flex-shrink: 0;
 }
 
-.logo {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, #6366f1, #a855f7);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: bold;
-  font-family: sans-serif;
-  box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
-  font-size: 14px;
-  flex-shrink: 0;
-}
-
 .canvas-wrap {
   flex: 1;
   position: relative;
