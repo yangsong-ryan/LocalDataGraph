@@ -72,58 +72,6 @@ curl -X POST http://localhost:3001/api/save \
   -d '{"canvases":[...], "activeCanvasId":"canvas_default"}'
 ```
 
-## MCP 接入（供 AI 助手使用）
-
-### 配置
-
-在 Claude Desktop 或其他 MCP 客户端的配置文件中添加：
-
-```json
-{
-  "mcpServers": {
-    "shadow-lineage": {
-      "command": "node",
-      "args": ["/path/to/LocalDataGraph/mcp-server.js"]
-    }
-  }
-}
-```
-
-### 可用工具
-
-#### `list_canvases`
-
-列出所有画布及其基本信息。
-
-#### `get_impact_analysis`
-
-下游影响分析。从指定节点出发，BFS 遍历所有下游，按距离分层返回。
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| nodeId | string | 起始节点 ID（必填） |
-| canvasId | string | 画布 ID（可选，默认活跃画布） |
-
-示例输出：
-
-```
-## 下游影响分析: 订单同步任务 [dw_order_sync]
-画布: 默认画布 | 受影响节点总数: 2
-
-### 第 1 层（距离 1）
-- 日报生成任务 [dw_report_gen]
-- API 触发器 [custom_api_trigger]
-```
-
-#### `get_source_tracing`
-
-上游溯源。从指定节点出发，反向 BFS 遍历所有祖先，按距离分层返回。
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| nodeId | string | 目标节点 ID（必填） |
-| canvasId | string | 画布 ID（可选，默认活跃画布） |
-
 ## 数据格式 (`graph.json`)
 
 ```json
@@ -173,7 +121,6 @@ LocalDataGraph/
 ├── vite.config.js              # Vite 构建配置
 ├── index.html
 ├── server.js                   # Express 后端（API + 静态文件）
-├── mcp-server.js               # MCP stdio 服务（只读）
 ├── graph.json                  # 图谱数据（单点真相）
 ├── src/
 │   ├── main.jsx
@@ -195,5 +142,3 @@ LocalDataGraph/
 | 前端 | Vite + React + @xyflow/react |
 | 布局 | Dagre（左→右拓扑排序） |
 | 后端 | Express（轻量级，无数据库） |
-| 算法 | BFS / 反向 BFS（分层输出） |
-| MCP | @modelcontextprotocol/sdk（stdio 传输） |
