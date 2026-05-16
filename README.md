@@ -143,17 +143,27 @@ hub.get_chain("默认画布", "dw_user_etl", "dw_report_gen")
 
 ```
 LocalDataGraph/
-├── server.js                # Express 后端（API + 静态文件）
-├── lineage.py               # Python 图谱分析 SDK
-├── graph.json               # 图谱数据（git 忽略，用户私有）
+├── package.json
+├── vite.config.js              # Vite 构建配置
+├── index.html                  # 入口 HTML
+├── server.js                   # Express 后端（API + 静态文件）
+├── lineage.py                  # Python 图谱分析 SDK
+├── graph.json                  # 图谱数据（git 忽略，用户私有）
+├── .gitignore
+├── public/
+│   └── favicon.svg
 ├── src/
-│   ├── App.jsx              # 主布局 + 多画布状态
+│   ├── main.jsx                # React 入口
+│   ├── App.jsx                 # 主布局 + 多画布状态
+│   ├── App.css
+│   ├── index.css
+│   ├── api.js                  # 前端 API 请求层
 │   └── components/
-│       ├── GraphEditor.jsx  # React Flow 编辑器（undo/redo + 保存确认）
-│       ├── CustomNode.jsx   # 自定义节点 + 编辑弹窗
-│       ├── TabBar.jsx       # 多画布 Tab 栏
-│       └── Logo.jsx         # SVG 呼吸灯 Logo
-└── public/favicon.svg
+│       ├── GraphEditor.jsx     # React Flow 编辑器（undo/redo + 保存确认）
+│       ├── CustomNode.jsx      # 自定义节点 + 编辑弹窗
+│       ├── TabBar.jsx          # 多画布 Tab 栏
+│       └── Logo.jsx            # SVG 呼吸灯 Logo
+└── dist/                       # 构建产物（npm run build）
 ```
 
 ## 技术栈
