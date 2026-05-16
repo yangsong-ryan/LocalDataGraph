@@ -1,78 +1,108 @@
-# DataWorks 血缘影子中枢 (Shadow Lineage Hub)
+# DataWorks 血缘影子中枢
 
-补全 DataWorks 官方血缘无法识别的隐性依赖（API 调用、跨库触发等），通过可视化界面手动构建增强血缘图。
+在本地手动构建增强血缘图，补全 DataWorks 官方血缘的隐性依赖（API 调用、跨库触发等）。**图是给人看的，更是给代码和 Agent 读的** — 通过 Python SDK 读取 `graph.json`，输出结构化依赖关系和 Mermaid 文本，用于日常血缘梳理、排障和 LLM 上下文投喂。
 
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
 npm install
-
-# 2. 启动服务（前端构建 + 后端启动，单端口）
 npm start
 ```
 
-浏览器打开 `http://localhost:3001` 即可使用。
+浏览器打开 `http://localhost:3001`。数据保存在 `graph.json`（首次启动自动创建）。
 
-> 开发模式：`npm run dev`（Vite 热更新，:5173） + `node server.js`（Express API，:3001）
+> 开发模式：`npm run dev`（Vite 热更新 :5173） + `node server.js`（Express :3001）
 
-## 界面操作
-
-### 多画布
-
-- 顶部 Tab 栏，支持**新建 / 切换 / 重命名 / 删除**画布
-- 双击 Tab 名称可重命名
-- 切换画布时自动保存当前数据
-- 所有画布数据存在同一个 `graph.json` 中
-
-### 节点管理
+## 可视化编辑器
 
 | 操作 | 方式 |
 |------|------|
+| 画布管理 | 顶部 Tab 栏新建/切换/删除，双击名称可重命名 |
 | 添加 DataWorks 节点 | 点击 **「+ DataWorks 节点」**（蓝色） |
 | 添加自定义节点 | 点击 **「+ 自定义节点」**（橙色） |
-| 编辑节点 | **双击**节点，弹出编辑窗：可修改 ID、名称、注释 |
-| 删除节点 | 选中节点后按 `Delete` / `Backspace` |
+| 编辑节点 | 双击节点，可修改 ID、名称、注释 |
+| 删除节点 | 选中按 `Delete` / `Backspace` |
+| 连线 | 拖拽节点边缘圆点至目标节点 |
+| 虚线/实线切换 | 右键连线 → 切换强依赖（实线）/ 弱依赖（虚线） |
+| 撤回/重做 | `Ctrl+Z` / `Ctrl+Shift+Z`，最多 50 步 |
+| 保存 | 点击保存 → 确认弹窗 → 覆盖写入 `graph.json` |
 
-节点编辑窗：
-- **ID**：必填，可修改但不能与已有节点重复
-- **名称**：节点显示的主标题
-- **注释**：多行备注，会显示在节点下方
+## Python SDK
 
-### 连线
+`lineage.py` 是独立的 Python 脚本，读取 `graph.json` 提供图谱分析能力。IDEA 里直接 `import lineage` 即可使用。
 
-- 鼠标按住节点边缘圆点，拖拽到目标节点即可直接连线（无弹窗）
-- 连线样式为平滑折线（smoothstep），带箭头
+### 5 个核心函数
 
-### 撤回 / 重做
+```python
+from lineage import LineageHub
 
-- 工具栏 **↩** **↪** 按钮，或快捷键 **Ctrl+Z** / **Ctrl+Shift+Z**
-- 支持撤回：新增节点、删除节点、连线、编辑、拖拽位置等操作
-- 最多保留 50 步历史
-
-### 保存
-
-点击 **「保存」** 弹出确认对话框，确认后将当前画布的全量数据写入 `graph.json`。
-
-## API 接口
-
-### `GET /api/graph`
-
-读取完整数据（所有画布）。
-
-```bash
-curl http://localhost:3001/api/graph
+hub = LineageHub("graph.json")
 ```
 
-### `POST /api/save`
+**1. list_canvases()** — 所有画布名称
 
-保存全量数据（覆盖写入 `graph.json`）。
-
-```bash
-curl -X POST http://localhost:3001/api/save \
-  -H "Content-Type: application/json" \
-  -d '{"canvases":[...], "activeCanvasId":"canvas_default"}'
+```python
+hub.list_canvases()
+# [{"name": "默认画布", "id": "canvas_default", "node_count": 4, "edge_count": 3}, ...]
 ```
+
+**2. get_canvas(name)** — 画布完整结构
+
+```python
+hub.get_canvas("默认画布")
+# {
+#   "id": "canvas_default",
+#   "name": "默认画布",
+#   "nodes": [...],
+#   "edges": [...],
+#   "mermaid": "```mermaid\ngraph TD\n    ..."
+# }
+```
+
+**3. get_upstream(node_id, canvas_name)** — 直接上游
+
+```python
+hub.get_upstream("dw_report_gen", "默认画布")
+# [{"id": "dw_001", "label": "订单同步", "comment": "...", "lineStyle": "solid"}, ...]
+```
+
+**4. get_downstream(node_id, canvas_name)** — 直接下游
+
+```python
+hub.get_downstream("dw_user_etl", "默认画布")
+# [{"id": "dw_002", "label": "日报生成", "comment": "...", "lineStyle": "dashed"}, ...]
+```
+
+**5. get_chain(canvas_name, start_id, end_id)** — 两节点间链路
+
+```python
+hub.get_chain("默认画布", "dw_user_etl", "dw_report_gen")
+# {
+#   "start": {"id": "...", "label": "..."},
+#   "end":   {"id": "...", "label": "..."},
+#   "nodes": [...],
+#   "edges": [...],
+#   "mermaid": "```mermaid\ngraph TD\n    ..."
+# }
+```
+
+### 给 Agent 使用
+
+`get_canvas` 和 `get_chain` 返回的 `mermaid` 字段包含完整的 Mermaid 文本，开头附有业务规则声明：
+
+```
+### 数仓血缘图例与排查规则声明：
+1. 实线箭头 (-->) 代表【强依赖 / 数据流依赖】
+   - 业务含义：上游任务必须成功运行并产出数据，下游才能正常读取和计算
+   - 排查指导：下游数据缺失时，优先排查实线指向的上游执行异常或数据断流
+   - 补数指导：重跑上游后，必须顺着实线箭头依次重跑所有下游
+2. 虚线箭头 (-.->) 代表【弱依赖 / 跨链关联 / 未配置调度】
+   - 业务含义：节点间存在逻辑关联，但 DataWorks 内部未配置底层调度依赖
+   - 排查指导：下游数据缺失时，需排查弱依赖的触发器、中间表或外部同步任务
+   - 补数指导：重跑虚线上游时，下游不会自动联动，需手动补数
+```
+
+直接复制粘贴给 LLM，Agent 即可理解你的数据依赖关系并给出排障建议。
 
 ## 数据格式 (`graph.json`)
 
@@ -85,7 +115,7 @@ curl -X POST http://localhost:3001/api/save \
       "nodes": [
         {
           "id": "dw_001",
-          "type": "task",
+          "type": "customNode",
           "data": {
             "label": "订单任务",
             "origin": "DataWorks",
@@ -99,7 +129,8 @@ curl -X POST http://localhost:3001/api/save \
           "id": "e_001_002",
           "source": "dw_001",
           "target": "custom_001",
-          "label": ""
+          "label": "",
+          "data": { "lineStyle": "solid" }
         }
       ]
     }
@@ -108,34 +139,21 @@ curl -X POST http://localhost:3001/api/save \
 }
 ```
 
-- `nodes[].id` — 唯一标识，可自定义但不可重复
-- `nodes[].data.label` — 节点名称
-- `nodes[].data.origin` — `"DataWorks"` 或 `"自定义"`，决定前端渲染颜色
-- `nodes[].data.comment` — 备注/注释（多行），可为空
-- `edges[].label` — 连线标签（当前默认为空）
-- 兼容旧格式：无 `canvases` 字段时自动迁移为单画布
-
 ## 项目结构
 
 ```
 LocalDataGraph/
-├── package.json
-├── vite.config.js              # Vite 构建配置
-├── index.html
-├── server.js                   # Express 后端（API + 静态文件）
-├── graph.json                  # 图谱数据（单点真相）
+├── server.js                # Express 后端（API + 静态文件）
+├── lineage.py               # Python 图谱分析 SDK
+├── graph.json               # 图谱数据（git 忽略，用户私有）
 ├── src/
-│   ├── main.jsx
-│   ├── App.jsx                 # 主布局 + 多画布状态管理
-│   ├── App.css
-│   ├── index.css
-│   ├── api.js                  # 前端请求层
+│   ├── App.jsx              # 主布局 + 多画布状态
 │   └── components/
-│       ├── CustomNode.jsx      # 自定义节点（四边 Handle + 编辑弹窗）
-│       ├── GraphEditor.jsx     # React Flow 编辑器（undo/redo + 保存确认）
-│       ├── Logo.jsx            # SVG 呼吸灯 Logo
-│       └── TabBar.jsx          # 多画布 Tab 栏
-└── dist/                       # 构建产物（npm run build 生成）
+│       ├── GraphEditor.jsx  # React Flow 编辑器（undo/redo + 保存确认）
+│       ├── CustomNode.jsx   # 自定义节点 + 编辑弹窗
+│       ├── TabBar.jsx       # 多画布 Tab 栏
+│       └── Logo.jsx         # SVG 呼吸灯 Logo
+└── public/favicon.svg
 ```
 
 ## 技术栈
@@ -143,4 +161,5 @@ LocalDataGraph/
 | 层 | 技术 |
 |----|------|
 | 前端 | Vite + React + @xyflow/react |
-| 后端 | Express（轻量级，无数据库） |
+| 后端 | Express |
+| SDK | Python 3，零依赖 |
