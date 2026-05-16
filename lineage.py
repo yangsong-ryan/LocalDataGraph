@@ -116,30 +116,16 @@ class LineageHub:
                 "name": "默认画布",
                 "nodes": [...],
                 "edges": [...],
-                "flows": [   # 数据流转关系
-                    {"from": "节点A", "to": "节点B", "label": "..."},
-                    ...
-                ]
+                "mermaid": "```mermaid\\ngraph TD\\n    ..."
             }
         """
         canvas = self._get_canvas(name)
-        nm = self._node_map(canvas)
-        flows = []
-        for e in canvas["edges"]:
-            flows.append({
-                "from": nm[e["source"]]["data"]["label"] if e["source"] in nm else e["source"],
-                "from_id": e["source"],
-                "to": nm[e["target"]]["data"]["label"] if e["target"] in nm else e["target"],
-                "to_id": e["target"],
-                "label": e.get("label", ""),
-                "lineStyle": (e.get("data", {}) or {}).get("lineStyle", e.get("lineStyle", "solid"))
-            })
         return {
             "id": canvas["id"],
             "name": canvas["name"],
             "nodes": canvas["nodes"],
             "edges": canvas["edges"],
-            "flows": flows
+            "mermaid": self.canvas_to_mermaid(name)
         }
 
     def get_upstream(self, node_id: str, canvas_name: str) -> list[dict]:
@@ -206,9 +192,9 @@ class LineageHub:
             {
                 "start": {"id": "...", "label": "..."},
                 "end": {"id": "...", "label": "..."},
-                "nodes": [...],     # 路径上的所有节点
-                "edges": [...],     # 路径上的所有边
-                "chain_text": "节点A → 节点B → 节点C"
+                "nodes": [...],
+                "edges": [...],
+                "mermaid": "```mermaid\\ngraph TD\\n    ..."
             }
         """
         canvas = self._get_canvas(canvas_name)
@@ -242,15 +228,14 @@ class LineageHub:
             if e["source"] in reachable_from_start and e["target"] in can_reach_end:
                 valid_edges.append(e)
 
-        # 拓扑排序生成 chain_text
-        chain_text = self._build_chain_text(start_id, end_id, valid_edges, nm)
+        path_nodes_list = [n for n in canvas["nodes"] if n["id"] in path_nodes]
 
         return {
             "start": {"id": start_id, "label": nm[start_id]["data"]["label"] if start_id in nm else start_id},
             "end": {"id": end_id, "label": nm[end_id]["data"]["label"] if end_id in nm else end_id},
-            "nodes": [n for n in canvas["nodes"] if n["id"] in path_nodes],
+            "nodes": path_nodes_list,
             "edges": valid_edges,
-            "chain_text": chain_text
+            "mermaid": self._build_mermaid(path_nodes_list, valid_edges)
         }
 
     # ── Mermaid 格式化（供 LLM 消费）─────────────────
@@ -267,90 +252,40 @@ class LineageHub:
         "   - **补数指导**：重跑虚线箭头的上游节点时，下游**不会**自动联动，通常需要数仓开发人员手动去补下游节点的数据。\n"
     )
 
-    def canvas_to_mermaid(self, name: str) -> str:
-        """
-        将画布的全部 nodes / edges 转换为 Mermaid graph TD 格式，
-        适合直接投喂给大模型（LLM）作为上下文。
+    # ── 内部：Mermaid 构建（消除 canvas/chain 重复）────
 
-        输出示例:
-            ```mermaid
-            graph TD
-                dw_001["订单同步任务"]
-                dw_002["日报生成任务"]
-                dw_001 --> dw_002
-                %% dw_001(订单同步任务): 上游依赖 DWD 层
-            ```
-        """
-        canvas = self._get_canvas(name)
+    @classmethod
+    def _build_mermaid(cls, nodes: list, edges: list) -> str:
         lines = ["```mermaid", "graph TD"]
 
-        # 节点定义
-        for n in canvas["nodes"]:
-            label = self._escape_mermaid(n["data"]["label"])
+        for n in nodes:
+            label = cls._escape_mermaid(n["data"]["label"])
             lines.append(f"    {n['id']}[\"{label}\"]")
 
-        # 注释：携带业务上下文
-        for n in canvas["nodes"]:
+        for n in nodes:
             comment = n["data"].get("comment", "").strip()
             if comment:
                 label = n["data"]["label"]
-                safe_comment = self._escape_mermaid(comment)
-                lines.append(f"    %% {n['id']}({label}): {safe_comment}")
+                safe = cls._escape_mermaid(comment)
+                lines.append(f"    %% {n['id']}({label}): {safe}")
 
-        # 连线
-        for e in canvas["edges"]:
-            line_style = (e.get("data", {}) or {}).get("lineStyle", "solid")
-            arrow = "-.->" if line_style == "dashed" else "-->"
+        for e in edges:
+            ls = (e.get("data", {}) or {}).get("lineStyle", "solid")
+            arrow = "-.->" if ls == "dashed" else "-->"
             lines.append(f"    {e['source']} {arrow} {e['target']}")
 
         lines.append("```")
-        return self._LEGEND + "\n" + "\n".join(lines)
+        return cls._LEGEND + "\n" + "\n".join(lines)
+
+    def canvas_to_mermaid(self, name: str) -> str:
+        """画布全部 nodes/edges → Mermaid graph TD"""
+        canvas = self._get_canvas(name)
+        return self._build_mermaid(canvas["nodes"], canvas["edges"])
 
     def chain_to_mermaid(self, canvas_name: str, start_id: str, end_id: str) -> str:
-        """
-        将两点间链路转换为 Mermaid graph TD 格式（仅含路径上的节点和边），
-        适合直接投喂给大模型（LLM）作为上下文。
-
-        输出示例:
-            ```mermaid
-            graph TD
-                dw_001["订单同步任务"]
-                dw_002["日报生成任务"]
-                dw_001 -.-> dw_002
-                %% dw_001(订单同步任务): 上游依赖 DWD 层
-            ```
-
-            **链路说明**: 订单同步任务 → 日报生成任务
-        """
+        """两点间链路 → Mermaid graph TD"""
         chain = self.get_chain(canvas_name, start_id, end_id)
-        lines = ["```mermaid", "graph TD"]
-
-        # 节点定义
-        for n in chain["nodes"]:
-            label = self._escape_mermaid(n["data"]["label"])
-            lines.append(f"    {n['id']}[\"{label}\"]")
-
-        # 注释
-        for n in chain["nodes"]:
-            comment = n["data"].get("comment", "").strip()
-            if comment:
-                label = n["data"]["label"]
-                safe_comment = self._escape_mermaid(comment)
-                lines.append(f"    %% {n['id']}({label}): {safe_comment}")
-
-        # 连线
-        for e in chain["edges"]:
-            line_style = (e.get("data", {}) or {}).get("lineStyle", "solid")
-            arrow = "-.->" if line_style == "dashed" else "-->"
-            lines.append(f"    {e['source']} {arrow} {e['target']}")
-
-        lines.append("```")
-
-        if chain["chain_text"]:
-            lines.append("")
-            lines.append(f"**链路说明**: {chain['chain_text']}")
-
-        return self._LEGEND + "\n" + "\n".join(lines)
+        return self._build_mermaid(chain["nodes"], chain["edges"])
 
     @staticmethod
     def _escape_mermaid(text: str) -> str:
@@ -371,56 +306,6 @@ class LineageHub:
                     visited.add(nb)
                     queue.append(nb)
         return visited
-
-    @staticmethod
-    def _build_chain_text(start_id, end_id, edges, node_map) -> str:
-        """根据边和节点生成链路文本，如 'A → B → C'"""
-        if not edges:
-            # 尝试直接用 BFS 找路径
-            return ""
-
-        # 构建邻接 + 拓扑排序简化路径
-        adj: dict[str, list[str]] = {}
-        in_degree: dict[str, int] = {}
-        all_nodes = set()
-        for e in edges:
-            all_nodes.add(e["source"])
-            all_nodes.add(e["target"])
-
-        for n in all_nodes:
-            adj[n] = []
-            in_degree[n] = 0
-
-        for e in edges:
-            adj[e["source"]].append(e["target"])
-            in_degree[e["target"]] += 1
-
-        # Kahn 拓扑排序（仅 path 内节点）
-        queue = deque([n for n in all_nodes if in_degree[n] == 0])
-        topo = []
-        while queue:
-            cur = queue.popleft()
-            topo.append(cur)
-            for nb in adj[cur]:
-                in_degree[nb] -= 1
-                if in_degree[nb] == 0:
-                    queue.append(nb)
-
-        # 从 topo 中提取 start → end 之间的节点
-        try:
-            si = topo.index(start_id)
-            ei = topo.index(end_id)
-            chain_ids = topo[si:ei + 1]
-        except ValueError:
-            chain_ids = [start_id, end_id]
-
-        # 生成文本
-        parts = []
-        for nid in chain_ids:
-            label = node_map[nid]["data"]["label"] if nid in node_map else nid
-            parts.append(label)
-        return " → ".join(parts)
-
 
 # ── 便捷函数（无需实例化）──────────────────────────
 
@@ -472,53 +357,61 @@ def chain_to_mermaid(canvas_name: str, start_id: str, end_id: str, path: str = "
 # ── 命令行测试入口 ──────────────────────────────────
 
 if __name__ == "__main__":
-    import sys
+    import sys, json
 
-    hub_path = sys.argv[1] if len(sys.argv) > 1 else "graph.json"
-    hub = LineageHub(hub_path)
+    path = sys.argv[1] if len(sys.argv) > 1 else "graph.json"
+    hub = LineageHub(path)
 
+    # 1. list_canvases
     print("=" * 60)
-    print("画布列表")
+    print("1. list_canvases()")
     print("=" * 60)
-    for c in hub.list_canvases():
-        print(f"  {c['name']}  ({c['node_count']} 节点, {c['edge_count']} 连线)")
-
-    # 取第一个画布做演示
     canvases = hub.list_canvases()
-    if not canvases:
-        print("(无画布)")
-        sys.exit(0)
+    print(json.dumps(canvases, ensure_ascii=False, indent=2))
 
-    demo_name = canvases[0]["name"]
+    for c in canvases:
+        name = c["name"]
+        print(f"\n{'=' * 60}")
+        print(f"画布: {name}")
+        print("=" * 60)
 
-    # ── 方法 2: Mermaid 全画布 ──
-    print(f"\n{'=' * 60}")
-    print(f"画布「{demo_name}」→ Mermaid (供 LLM 消费)")
-    print("=" * 60)
-    print(hub.canvas_to_mermaid(demo_name))
+        # 2. get_canvas (mermaid 太长只打前 200 字)
+        print(f"\n2. get_canvas(\"{name}\")")
+        canvas = hub.get_canvas(name)
+        print(f"   节点: {len(canvas['nodes'])}  边: {len(canvas['edges'])}")
+        print(f"\n   --- mermaid ---")
+        print(canvas["mermaid"])
 
-    # ── JSON 流转结构 ──
-    canvas = hub.get_canvas(demo_name)
-    print(f"\n画布「{demo_name}」数据流转 (JSON):")
-    for f in canvas["flows"]:
-        label = f" [{f['label']}]" if f["label"] else ""
-        style = "虚线" if f["lineStyle"] == "dashed" else "实线"
-        print(f"  {f['from']} → {f['to']}{label}  ({style})")
+        if not canvas["nodes"]:
+            continue
 
-    # ── 上下游 ──
-    if canvas["nodes"]:
-        n0 = canvas["nodes"][0]["id"]
-        print(f"\n节点 [{n0}] 直接下游:")
-        for d in hub.get_downstream(n0, demo_name):
-            label = f" [{d['edge_label']}]" if d["edge_label"] else ""
-            print(f"  → {d['label']}{label}")
+        # 3. get_downstream（找第一个有下游的节点）
+        if canvas["edges"]:
+            src = canvas["edges"][0]["source"]
+            print(f"\n3. get_downstream(\"{src}\", \"{name}\")")
+            for d in hub.get_downstream(src, name):
+                s = "虚线" if d["lineStyle"] == "dashed" else "实线"
+                print(f"     → {d['label']} [{d['id']}] ({s})")
 
-    # ── 方法 5: Mermaid 链路 ──
-    if len(canvas["nodes"]) >= 2:
-        n1 = canvas["nodes"][0]["id"]
-        n2 = canvas["nodes"][-1]["id"]
-        if n1 != n2:
-            print(f"\n{'=' * 60}")
-            print(f"链路 [{n1}] → [{n2}] → Mermaid (供 LLM 消费)")
-            print("=" * 60)
-            print(hub.chain_to_mermaid(demo_name, n1, n2))
+            # 4. get_upstream（找第一个有上游的节点）
+            tgt = canvas["edges"][0]["target"]
+            print(f"\n4. get_upstream(\"{tgt}\", \"{name}\")")
+            for u in hub.get_upstream(tgt, name):
+                s = "虚线" if u["lineStyle"] == "dashed" else "实线"
+                print(f"     ← {u['label']} [{u['id']}] ({s})")
+
+        # 5. get_chain（从 root 到 leaf）
+        if len(canvas["nodes"]) >= 2:
+            all_ids = {n["id"] for n in canvas["nodes"]}
+            has_up = {e["target"] for e in canvas["edges"]}
+            has_down = {e["source"] for e in canvas["edges"]}
+            roots = [nid for nid in all_ids if nid not in has_up]
+            leaves = [nid for nid in all_ids if nid not in has_down]
+            if roots and leaves:
+                s, e = roots[0], leaves[0]
+                print(f"\n5. get_chain(\"{name}\", \"{s}\", \"{e}\")")
+                chain = hub.get_chain(name, s, e)
+                print(chain)
+                print(f"   路径节点数: {len(chain['nodes'])}  路径边数: {len(chain['edges'])}")
+                print(f"\n   --- mermaid ---")
+                print(chain["mermaid"])
