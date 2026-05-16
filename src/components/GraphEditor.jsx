@@ -8,7 +8,9 @@ import {
   useEdgesState,
   addEdge,
   Panel,
-  MarkerType
+  MarkerType,
+  BaseEdge,
+  getSmoothStepPath
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import CustomNode, { NodeEditModal } from './CustomNode'
@@ -26,6 +28,60 @@ function genId(prefix = 'node') {
 }
 
 const MAX_HISTORY = 50
+
+// ---------- 自定义连线（支持虚/实线）----------
+function StyledEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, data }) {
+  const [edgePath] = getSmoothStepPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
+  const isDashed = data?.lineStyle === 'dashed'
+  return (
+    <BaseEdge
+      id={id}
+      path={edgePath}
+      markerEnd={markerEnd}
+      style={{
+        stroke: isDashed ? '#999' : '#555',
+        strokeWidth: isDashed ? 1.5 : 2,
+        strokeDasharray: isDashed ? '8,4' : 'none'
+      }}
+    />
+  )
+}
+
+const edgeTypes = { styled: StyledEdge }
+
+// ---------- 右键菜单 ----------
+function EdgeContextMenu({ x, y, edge, onToggleStyle, onClose }) {
+  useEffect(() => {
+    const handler = () => onClose()
+    window.addEventListener('click', handler)
+    return () => window.removeEventListener('click', handler)
+  }, [onClose])
+
+  return (
+    <div
+      style={{
+        position: 'fixed', left: x, top: y, zIndex: 10000,
+        background: '#fff', borderRadius: 6, boxShadow: '0 3px 16px rgba(0,0,0,.18)',
+        padding: '4px 0', minWidth: 140, fontSize: 13
+      }}
+    >
+      <div style={{ padding: '4px 12px', color: '#999', fontSize: 11, borderBottom: '1px solid #eee' }}>
+        连线操作
+      </div>
+      <div
+        onClick={() => { onToggleStyle(edge.id); onClose() }}
+        style={{ padding: '6px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+        onMouseEnter={e => e.target.style.background = '#f0f0f0'}
+        onMouseLeave={e => e.target.style.background = 'transparent'}
+      >
+        <span style={{ fontSize: 16 }}>
+          {edge.data?.lineStyle === 'dashed' ? '┅' : '━'}
+        </span>
+        <span>{edge.data?.lineStyle === 'dashed' ? '切换为强依赖（实线）' : '切换为弱依赖（虚线）'}</span>
+      </div>
+    </div>
+  )
+}
 
 // ---------- 保存确认弹窗 ----------
 function SaveConfirmModal({ onConfirm, onCancel }) {
@@ -54,8 +110,8 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
   const [status, setStatus] = useState('')
   const [editingNode, setEditingNode] = useState(null)
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
+  const [contextMenu, setContextMenu] = useState(null)
 
-  // undo/redo 历史
   const historyRef = useRef([])
   const historyIndexRef = useRef(-1)
   const skipHistoryRef = useRef(false)
@@ -92,7 +148,6 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
     setStatus('已重做')
   }, [setNodes, setEdges])
 
-  // Ctrl+Z / Ctrl+Shift+Z
   useEffect(() => {
     const handler = e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
@@ -106,7 +161,6 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
     return () => window.removeEventListener('keydown', handler)
   }, [undo, redo])
 
-  // 切换画布时同步数据
   useEffect(() => {
     const nds = initialNodes.map(n => ({ ...n, deletable: true }))
     setNodes(nds)
@@ -120,19 +174,16 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
     }, 100)
   }, [initialNodes, initialEdges, setNodes, setEdges, pushHistory])
 
-  // 初始化历史
   useEffect(() => {
     if (historyRef.current.length === 0 && nodes.length >= 0) {
       pushHistory(nodes, edges)
     }
   }, [])
 
-  // 拖拽结束时记录历史
   const onNodeDragStop = useCallback(() => {
     pushHistory(nodes, edges)
   }, [nodes, edges, pushHistory])
 
-  // 删除时记录历史
   const onNodesDelete = useCallback((deleted) => {
     pushHistory(
       nodes.filter(n => !deleted.some(d => d.id === n.id)),
@@ -144,11 +195,11 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
     pushHistory(nodes, edges.filter(e => !deleted.some(d => d.id === e.id)))
   }, [nodes, edges, pushHistory])
 
-  // 连线
   const onConnect = useCallback(params => {
     const newEdge = {
       ...params,
       label: '',
+      data: { lineStyle: 'solid' },
       id: genId('e'),
       markerEnd: { type: MarkerType.ArrowClosed }
     }
@@ -159,7 +210,6 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
     })
   }, [nodes, pushHistory, setEdges])
 
-  // 节点双击 → 打开编辑弹窗
   const onNodeDoubleClick = useCallback((_, node) => {
     setEditingNode({ id: node.id, label: node.data.label, comment: node.data.comment || '' })
   }, [])
@@ -167,22 +217,16 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
   const handleNodeEditConfirm = useCallback((newId, newLabel, newComment) => {
     if (!editingNode) return
     const oldId = editingNode.id
-
     setNodes(nds => {
       const next = nds.map(n =>
-        n.id === oldId
-          ? { ...n, id: newId, data: { ...n.data, label: newLabel, comment: newComment } }
-          : n
+        n.id === oldId ? { ...n, id: newId, data: { ...n.data, label: newLabel, comment: newComment } } : n
       )
       return next
     })
-
     if (newId !== oldId) {
       setEdges(eds => {
         const next = eds.map(e => ({
-          ...e,
-          source: e.source === oldId ? newId : e.source,
-          target: e.target === oldId ? newId : e.target
+          ...e, source: e.source === oldId ? newId : e.source, target: e.target === oldId ? newId : e.target
         }))
         pushHistory(nodes.map(n => n.id === oldId ? { ...n, id: newId } : n), next)
         return next
@@ -190,22 +234,34 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
     } else {
       setNodes(nds => {
         const next = nds.map(n =>
-          n.id === oldId
-            ? { ...n, id: newId, data: { ...n.data, label: newLabel, comment: newComment } }
-            : n
+          n.id === oldId ? { ...n, id: newId, data: { ...n.data, label: newLabel, comment: newComment } } : n
         )
         pushHistory(next, edges)
         return next
       })
     }
-
     setEditingNode(null)
   }, [editingNode, nodes, edges, pushHistory, setNodes, setEdges])
 
-  // 保存
-  const handleSave = useCallback(async () => {
-    setShowSaveConfirm(true)
+  // 右键连线 → 切换虚/实线
+  const onEdgeContextMenu = useCallback((event, edge) => {
+    event.preventDefault()
+    setContextMenu({ x: event.clientX, y: event.clientY, edge })
   }, [])
+
+  const toggleLineStyle = useCallback(edgeId => {
+    setEdges(eds => {
+      const next = eds.map(e => {
+        if (e.id !== edgeId) return e
+        const cur = e.data?.lineStyle || 'solid'
+        return { ...e, data: { ...e.data, lineStyle: cur === 'dashed' ? 'solid' : 'dashed' } }
+      })
+      pushHistory(nodes, next)
+      return next
+    })
+  }, [nodes, pushHistory, setEdges])
+
+  const handleSave = useCallback(() => { setShowSaveConfirm(true) }, [])
 
   const doSave = useCallback(async () => {
     setShowSaveConfirm(false)
@@ -250,9 +306,11 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
         onNodeDragStop={onNodeDragStop}
         onNodesDelete={onNodesDelete}
         onEdgesDelete={onEdgesDelete}
+        onEdgeContextMenu={onEdgeContextMenu}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         defaultEdgeOptions={{
-          type: 'smoothstep',
+          type: 'styled',
           markerEnd: { type: MarkerType.ArrowClosed }
         }}
         fitView
@@ -269,28 +327,10 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
               + 自定义节点
             </button>
             <span style={{ color: '#ccc', margin: '0 2px' }}>|</span>
-            <button
-              onClick={undo}
-              disabled={historyIndexRef.current <= 0}
-              title="撤回 (Ctrl+Z)"
-              style={{
-                padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4,
-                background: '#fff', cursor: 'pointer', fontSize: 13
-              }}
-            >
-              ↩
-            </button>
-            <button
-              onClick={redo}
-              disabled={historyIndexRef.current >= historyRef.current.length - 1}
-              title="重做 (Ctrl+Shift+Z)"
-              style={{
-                padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4,
-                background: '#fff', cursor: 'pointer', fontSize: 13
-              }}
-            >
-              ↪
-            </button>
+            <button onClick={undo} disabled={historyIndexRef.current <= 0} title="撤回 (Ctrl+Z)"
+              style={{ padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 }}>↩</button>
+            <button onClick={redo} disabled={historyIndexRef.current >= historyRef.current.length - 1} title="重做 (Ctrl+Shift+Z)"
+              style={{ padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 }}>↪</button>
             <span style={{ color: '#ccc', margin: '0 2px' }}>|</span>
             <button className="btn-save" onClick={handleSave} disabled={saving}>
               {saving ? '保存中...' : '保存'}
@@ -301,19 +341,19 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
 
       {editingNode && (
         <NodeEditModal
-          nodeId={editingNode.id}
-          label={editingNode.label}
-          comment={editingNode.comment}
-          allNodeIds={allNodeIds}
-          onConfirm={handleNodeEditConfirm}
-          onCancel={() => setEditingNode(null)}
+          nodeId={editingNode.id} label={editingNode.label} comment={editingNode.comment}
+          allNodeIds={allNodeIds} onConfirm={handleNodeEditConfirm} onCancel={() => setEditingNode(null)}
         />
       )}
 
       {showSaveConfirm && (
-        <SaveConfirmModal
-          onConfirm={doSave}
-          onCancel={() => setShowSaveConfirm(false)}
+        <SaveConfirmModal onConfirm={doSave} onCancel={() => setShowSaveConfirm(false)} />
+      )}
+
+      {contextMenu && (
+        <EdgeContextMenu
+          x={contextMenu.x} y={contextMenu.y} edge={contextMenu.edge}
+          onToggleStyle={toggleLineStyle} onClose={() => setContextMenu(null)}
         />
       )}
 

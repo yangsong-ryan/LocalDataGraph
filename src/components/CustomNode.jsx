@@ -1,15 +1,13 @@
 import { memo, useState } from 'react'
 import { Handle, Position } from '@xyflow/react'
 
+// source = 出边（右侧、底部），target = 入边（左侧、顶部）
+// 避免每边同时有 source+target 导致箭头方向反转
 const HANDLE_CONFIG = [
-  { id: 'source-top',    type: 'source', position: Position.Top },
   { id: 'source-right',  type: 'source', position: Position.Right },
   { id: 'source-bottom', type: 'source', position: Position.Bottom },
-  { id: 'source-left',   type: 'source', position: Position.Left },
-  { id: 'target-top',    type: 'target', position: Position.Top },
-  { id: 'target-right',  type: 'target', position: Position.Right },
-  { id: 'target-bottom', type: 'target', position: Position.Bottom },
   { id: 'target-left',   type: 'target', position: Position.Left },
+  { id: 'target-top',    type: 'target', position: Position.Top },
 ]
 
 export function NodeEditModal({ nodeId, label, comment, allNodeIds, onConfirm, onCancel }) {
