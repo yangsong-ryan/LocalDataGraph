@@ -313,6 +313,7 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
           type: 'styled',
           markerEnd: { type: MarkerType.ArrowClosed }
         }}
+        selectNodesOnDrag
         fitView
       >
         <Controls />
