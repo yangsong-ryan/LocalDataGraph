@@ -255,6 +255,18 @@ class LineageHub:
 
     # ── Mermaid 格式化（供 LLM 消费）─────────────────
 
+    _LEGEND = (
+        "### 📊 数仓血缘图例与排查规则声明：\n"
+        "1. **实线箭头 (-->) 代表【强依赖 / 数据流依赖】**：\n"
+        "   - **业务含义**：上游任务必须成功运行并产出数据，下游任务才能正常读取和计算。\n"
+        "   - **排查指导**：如果下游节点数据不对或缺失，大概率是直接强依赖的上游节点（实线指向源）执行异常或数据断流。\n"
+        "   - **补数指导**：上游数据重跑后，必须依次顺着实线箭头同步重跑所有下游节点。\n"
+        "2. **虚线箭头 (-.->) 代表【弱依赖 / 跨链关联 / 未配置调度】**：\n"
+        "   - **业务含义**：节点间存在逻辑上的业务关联或外部API触发，但在 DataWorks 内部【未配置底层的调度依赖关系】。下游不会因为上游的启动而自动触发。\n"
+        "   - **排查指导**：当下游数据缺失时，如果是虚线连接的上游，需优先排查该弱依赖的触发器、中间表、或者外部同步任务是否断开。\n"
+        "   - **补数指导**：重跑虚线箭头的上游节点时，下游**不会**自动联动，通常需要数仓开发人员手动去补下游节点的数据。\n"
+    )
+
     def canvas_to_mermaid(self, name: str) -> str:
         """
         将画布的全部 nodes / edges 转换为 Mermaid graph TD 格式，
@@ -292,7 +304,7 @@ class LineageHub:
             lines.append(f"    {e['source']} {arrow} {e['target']}")
 
         lines.append("```")
-        return "\n".join(lines)
+        return self._LEGEND + "\n" + "\n".join(lines)
 
     def chain_to_mermaid(self, canvas_name: str, start_id: str, end_id: str) -> str:
         """
@@ -338,7 +350,7 @@ class LineageHub:
             lines.append("")
             lines.append(f"**链路说明**: {chain['chain_text']}")
 
-        return "\n".join(lines)
+        return self._LEGEND + "\n" + "\n".join(lines)
 
     @staticmethod
     def _escape_mermaid(text: str) -> str:
