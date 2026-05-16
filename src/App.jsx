@@ -94,7 +94,7 @@ export default function App() {
       <div className="toolbar">
         <Logo size={28} />
         <h1>DataWorks 血缘影子中枢</h1>
-        <span style={{ fontSize: 12, opacity: 0.7 }}>双击节点编辑 | 拖拽连线加标注 | 双击连线名编辑 | 双击画布名重命名</span>
+        <span style={{ fontSize: 12, opacity: 0.7 }}>双击节点编辑 | 右键连线切换虚/实线 | Ctrl+Z 撤回 | 双击画布名重命名</span>
       </div>
       <TabBar
         canvases={canvases}
