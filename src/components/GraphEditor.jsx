@@ -83,38 +83,43 @@ function EdgeContextMenu({ x, y, edge, onToggleStyle, onClose }) {
   )
 }
 
-// ---------- 保存确认弹窗 ----------
-function SaveConfirmModal({ onConfirm, onCancel }) {
-  return (
-    <div
-      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
-      onClick={onCancel}
-    >
-      <div style={{ background: '#fff', borderRadius: 8, padding: 24, minWidth: 300, boxShadow: '0 4px 20px rgba(0,0,0,.2)', textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>确认保存</div>
-        <div style={{ fontSize: 13, color: '#666', marginBottom: 20 }}>将覆盖写入 graph.json，不可撤回。</div>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-          <button onClick={onCancel} style={{ padding: '8px 20px', border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 }}>取消</button>
-          <button onClick={onConfirm} style={{ padding: '8px 20px', border: 'none', borderRadius: 4, background: '#4caf50', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>确认保存</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ---------- 主组件 ----------
 export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, onSave }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
-  const [saving, setSaving] = useState(false)
-  const [status, setStatus] = useState('')
+  const [saveStatus, setSaveStatus] = useState('')
   const [editingNode, setEditingNode] = useState(null)
-  const [showSaveConfirm, setShowSaveConfirm] = useState(false)
   const [contextMenu, setContextMenu] = useState(null)
 
   const historyRef = useRef([])
   const historyIndexRef = useRef(-1)
   const skipHistoryRef = useRef(false)
+  const autoSaveRef = useRef(null)
+  const nodesRef = useRef(nodes)
+  const edgesRef = useRef(edges)
+
+  // 始终保持 ref 与 state 同步
+  nodesRef.current = nodes
+  edgesRef.current = edges
+
+  const scheduleAutoSave = useCallback(() => {
+    if (autoSaveRef.current) clearTimeout(autoSaveRef.current)
+    setSaveStatus('')
+    autoSaveRef.current = setTimeout(async () => {
+      setSaveStatus('保存中...')
+      try {
+        const cleanEdges = edgesRef.current.map(({ type, markerEnd, ...rest }) => rest)
+        await onSave(nodesRef.current, cleanEdges)
+        setSaveStatus('已自动保存 ' + new Date().toLocaleTimeString())
+      } catch {
+        setSaveStatus('自动保存失败')
+      }
+    }, 1500)
+  }, [onSave])
+
+  useEffect(() => {
+    return () => { if (autoSaveRef.current) clearTimeout(autoSaveRef.current) }
+  }, [])
 
   const pushHistory = useCallback((nds, eds) => {
     if (skipHistoryRef.current) return
@@ -134,8 +139,9 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
     setNodes(snap.nodes)
     setEdges(snap.edges)
     setTimeout(() => { skipHistoryRef.current = false }, 0)
-    setStatus('已撤回')
-  }, [setNodes, setEdges])
+    setSaveStatus('已撤回')
+    scheduleAutoSave()
+  }, [setNodes, setEdges, scheduleAutoSave])
 
   const redo = useCallback(() => {
     if (historyIndexRef.current >= historyRef.current.length - 1) return
@@ -145,8 +151,9 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
     setNodes(snap.nodes)
     setEdges(snap.edges)
     setTimeout(() => { skipHistoryRef.current = false }, 0)
-    setStatus('已重做')
-  }, [setNodes, setEdges])
+    setSaveStatus('已重做')
+    scheduleAutoSave()
+  }, [setNodes, setEdges, scheduleAutoSave])
 
   useEffect(() => {
     const handler = e => {
@@ -182,18 +189,21 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
 
   const onNodeDragStop = useCallback(() => {
     pushHistory(nodes, edges)
-  }, [nodes, edges, pushHistory])
+    scheduleAutoSave()
+  }, [nodes, edges, pushHistory, scheduleAutoSave])
 
   const onNodesDelete = useCallback((deleted) => {
     pushHistory(
       nodes.filter(n => !deleted.some(d => d.id === n.id)),
       edges.filter(e => !deleted.some(d => d.id === e.source || d.id === e.target))
     )
-  }, [nodes, edges, pushHistory])
+    scheduleAutoSave()
+  }, [nodes, edges, pushHistory, scheduleAutoSave])
 
   const onEdgesDelete = useCallback((deleted) => {
     pushHistory(nodes, edges.filter(e => !deleted.some(d => d.id === e.id)))
-  }, [nodes, edges, pushHistory])
+    scheduleAutoSave()
+  }, [nodes, edges, pushHistory, scheduleAutoSave])
 
   const onConnect = useCallback(params => {
     const newEdge = {
@@ -208,7 +218,8 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
       pushHistory(nodes, next)
       return next
     })
-  }, [nodes, pushHistory, setEdges])
+    scheduleAutoSave()
+  }, [nodes, pushHistory, setEdges, scheduleAutoSave])
 
   const onNodeDoubleClick = useCallback((_, node) => {
     setEditingNode({ id: node.id, label: node.data.label, comment: node.data.comment || '' })
@@ -241,7 +252,8 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
       })
     }
     setEditingNode(null)
-  }, [editingNode, nodes, edges, pushHistory, setNodes, setEdges])
+    scheduleAutoSave()
+  }, [editingNode, nodes, edges, pushHistory, setNodes, setEdges, scheduleAutoSave])
 
   // 右键连线 → 切换虚/实线
   const onEdgeContextMenu = useCallback((event, edge) => {
@@ -259,23 +271,8 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
       pushHistory(nodes, next)
       return next
     })
-  }, [nodes, pushHistory, setEdges])
-
-  const handleSave = useCallback(() => { setShowSaveConfirm(true) }, [])
-
-  const doSave = useCallback(async () => {
-    setShowSaveConfirm(false)
-    setSaving(true)
-    try {
-      const cleanEdges = edges.map(({ type, markerEnd, ...rest }) => rest)
-      await onSave(nodes, cleanEdges)
-      setStatus('保存成功 ' + new Date().toLocaleTimeString())
-    } catch {
-      setStatus('保存失败')
-    } finally {
-      setSaving(false)
-    }
-  }, [nodes, edges, onSave])
+    scheduleAutoSave()
+  }, [nodes, pushHistory, setEdges, scheduleAutoSave])
 
   const addNode = useCallback(type => {
     const def = NODE_TYPES_CONFIG[type]
@@ -290,7 +287,8 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
       pushHistory(next, edges)
       return next
     })
-  }, [edges, pushHistory, setNodes])
+    scheduleAutoSave()
+  }, [edges, pushHistory, setNodes, scheduleAutoSave])
 
   const allNodeIds = nodes.map(n => n.id)
 
@@ -332,10 +330,6 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
               style={{ padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 }}>↩</button>
             <button onClick={redo} disabled={historyIndexRef.current >= historyRef.current.length - 1} title="重做 (Ctrl+Shift+Z)"
               style={{ padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 }}>↪</button>
-            <span style={{ color: '#ccc', margin: '0 2px' }}>|</span>
-            <button className="btn-save" onClick={handleSave} disabled={saving}>
-              {saving ? '保存中...' : '保存'}
-            </button>
           </div>
         </Panel>
       </ReactFlow>
@@ -347,10 +341,6 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
         />
       )}
 
-      {showSaveConfirm && (
-        <SaveConfirmModal onConfirm={doSave} onCancel={() => setShowSaveConfirm(false)} />
-      )}
-
       {contextMenu && (
         <EdgeContextMenu
           x={contextMenu.x} y={contextMenu.y} edge={contextMenu.edge}
@@ -358,7 +348,7 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
         />
       )}
 
-      <div className="status-bar">{status}</div>
+      <div className="status-bar">{saveStatus}</div>
     </div>
   )
 }

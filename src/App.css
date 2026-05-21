@@ -30,9 +30,6 @@
   transition: background 0.15s;
 }
 
-.btn-save { background: #4caf50; color: #fff; }
-.btn-save:hover { background: #43a047; }
-
 .btn-add-dw { background: #1976d2; color: #fff; }
 .btn-add-dw:hover { background: #1565c0; }
 
