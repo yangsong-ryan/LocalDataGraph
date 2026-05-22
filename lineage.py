@@ -416,6 +416,85 @@ class LineageHub:
             "node_comment": node["data"]["comment"]
         }
 
+    def add_edge(self, canvas_name: str, from_node: str, to_node: str, *,
+                 edge_type: str = "solid") -> dict:
+        """
+        在两个节点之间添加一条连线。
+
+        参数:
+          canvas_name: 画布名称或 ID
+          from_node:   上游节点 ID（数据生产者）
+          to_node:     下游节点 ID（数据消费者）
+          edge_type:   "solid"（强依赖实线）或 "dashed"（弱依赖虚线），默认 "solid"
+
+        返回值:
+          成功: {"success": True, "edge_id": "...", "from_node": "...", "to_node": "...", "edge_type": "..."}
+          失败: {"success": False, "error": "..."}
+        """
+        canvas = self._get_canvas(canvas_name)
+
+        # 校验节点存在
+        nm = self._node_map(canvas)
+        if from_node not in nm:
+            return {"success": False, "error": f"上游节点不存在: 画布「{canvas['name']}」中没有节点 '{from_node}'"}
+        if to_node not in nm:
+            return {"success": False, "error": f"下游节点不存在: 画布「{canvas['name']}」中没有节点 '{to_node}'"}
+        if from_node == to_node:
+            return {"success": False, "error": f"不能自连: from_node 和 to_node 都是 '{from_node}'"}
+
+        # 校验唯一性（正方向 + 反方向都不允许）
+        for e in canvas["edges"]:
+            if e["source"] == from_node and e["target"] == to_node:
+                return {"success": False, "error": f"边已存在: {from_node} → {to_node}"}
+            if e["source"] == to_node and e["target"] == from_node:
+                return {"success": False, "error": f"反方向边已存在: {to_node} → {from_node}，同一对节点只允许一条边"}
+
+        # 生成 edge_id
+        ts = int(time.time() * 1000)
+        eid = f"e_{ts}"
+
+        new_edge = {
+            "id": eid,
+            "source": from_node,
+            "target": to_node,
+            "label": "",
+            "data": {"lineStyle": edge_type}
+        }
+
+        canvas["edges"].append(new_edge)
+        self._save()
+
+        return {
+            "success": True,
+            "edge_id": eid,
+            "from_node": from_node,
+            "to_node": to_node,
+            "edge_type": edge_type
+        }
+
+    def delete_edge(self, canvas_name: str, from_node: str, to_node: str) -> dict:
+        """
+        删除两个节点之间的连线。
+
+        参数:
+          canvas_name: 画布名称或 ID
+          from_node:   上游节点 ID
+          to_node:     下游节点 ID
+
+        返回值:
+          成功: {"success": True, "deleted_edge": "e_xxx"}
+          失败: {"success": False, "error": "..."}
+        """
+        canvas = self._get_canvas(canvas_name)
+
+        for e in canvas["edges"]:
+            if e["source"] == from_node and e["target"] == to_node:
+                canvas["edges"].remove(e)
+                self._save()
+                return {"success": True, "deleted_edge": e["id"]}
+
+        return {"success": False, "error": f"边不存在: 画布「{canvas['name']}」中没有边 {from_node} → {to_node}"}
+
     # ── Mermaid 格式化（供 LLM 消费）─────────────────
 
     _LEGEND = (
@@ -560,6 +639,20 @@ def update_node(canvas_name: str, node_id: str, *,
                                       node_comment=node_comment)
 
 
+def add_edge(canvas_name: str, from_node: str, to_node: str, *,
+             edge_type: str = "solid",
+             path: str = "graph.json") -> dict:
+    """添加连线（便捷函数）"""
+    return _get_hub(path).add_edge(canvas_name, from_node, to_node,
+                                   edge_type=edge_type)
+
+
+def delete_edge(canvas_name: str, from_node: str, to_node: str,
+                path: str = "graph.json") -> dict:
+    """删除连线（便捷函数）"""
+    return _get_hub(path).delete_edge(canvas_name, from_node, to_node)
+
+
 # ── 命令行测试入口 ──────────────────────────────────
 
 if __name__ == "__main__":
@@ -674,3 +767,36 @@ if __name__ == "__main__":
     # 删不存在的节点
     r3 = hub.delete_node(name, "not_exist_id")
     print(f"   [删不存在] {json.dumps(r3, ensure_ascii=False)}")
+
+    # 8. add_edge / delete_edge 测试
+    print("\n" + "=" * 60)
+    print("8. add_edge() / delete_edge() 测试")
+    print("=" * 60)
+
+    # 用 n2 (DataWorks) → n3 (custom)，因为 n1/n2/n3 还在
+    e1 = hub.add_edge(name, n2["id"], n3["id"], edge_type="solid")
+    print(f"   [加实线]  {json.dumps(e1, ensure_ascii=False)}")
+
+    # 反向冲突：n3 → n2 应该被拒（同对节点只允许一条边）
+    e2 = hub.add_edge(name, n3["id"], n2["id"])
+    print(f"   [反方向]  {json.dumps(e2, ensure_ascii=False)}")
+
+    # 重复冲突：再来一次 n2 → n3
+    e3 = hub.add_edge(name, n2["id"], n3["id"])
+    print(f"   [重复]    {json.dumps(e3, ensure_ascii=False)}")
+
+    # 自己连自己
+    e4 = hub.add_edge(name, n2["id"], n2["id"])
+    print(f"   [自连]    {json.dumps(e4, ensure_ascii=False)}")
+
+    # 连不存在的节点
+    e5 = hub.add_edge(name, n2["id"], "not_exist")
+    print(f"   [不存在]  {json.dumps(e5, ensure_ascii=False)}")
+
+    # 成功添加后，删除
+    d1 = hub.delete_edge(name, n2["id"], n3["id"])
+    print(f"   [删边]    {json.dumps(d1, ensure_ascii=False)}")
+
+    # 删除不存在的边
+    d2 = hub.delete_edge(name, n2["id"], n3["id"])
+    print(f"   [删不存在边] {json.dumps(d2, ensure_ascii=False)}")
