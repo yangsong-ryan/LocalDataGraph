@@ -23,6 +23,7 @@ DataWorks 血缘影子中枢 - Python 图谱分析 SDK
 """
 
 import json
+import time
 from collections import deque
 from typing import Optional
 
@@ -44,13 +45,20 @@ class LineageHub:
                 "activeCanvasId": "canvas_default"
             }
 
+        self._graph_path = graph_path
         self._raw = raw
         self._canvases: dict[str, dict] = {}
         self._name_to_id: dict[str, str] = {}
+        self._node_offset = 0
 
         for c in raw["canvases"]:
             self._canvases[c["id"]] = c
             self._name_to_id[c["name"]] = c["id"]
+
+    def _save(self):
+        """将当前内存状态写回 graph.json"""
+        with open(self._graph_path, "w", encoding="utf-8") as f:
+            json.dump(self._raw, f, ensure_ascii=False, indent=2)
 
     # ── 内部辅助 ──────────────────────────────────────
 
@@ -238,6 +246,176 @@ class LineageHub:
             "mermaid": self._build_mermaid(path_nodes_list, valid_edges)
         }
 
+    # ── 写图 API ─────────────────────────────────────
+
+    @staticmethod
+    def _node_width(node: dict) -> float:
+        return node.get("measured", {}).get("width", 200)
+
+    @staticmethod
+    def _node_height(node: dict) -> float:
+        return node.get("measured", {}).get("height", 80)
+
+    def add_node(self, canvas_name: str, node_name: str, *,
+                 node_type: str = "custom",
+                 node_comment: str = "",
+                 node_id: str = "",
+                 position: Optional[dict] = None) -> dict:
+        """
+        向指定画布添加一个节点。
+
+        参数:
+          canvas_name:  画布名称或 ID
+          node_name:    节点名称（画布上显示的文字）
+          node_type:    节点类型: "DataWorks"（蓝色）或 "custom"（橙色），默认 "custom"
+          node_comment: 备注说明，默认空
+          node_id:      自定义 ID，不传则自动生成
+          position:     {"x": 100, "y": 200}，不传则触发边缘顺延算法
+
+        返回值:
+          {"id": "...", "node_name": "...", "node_type": "...", "node_comment": "...", "position": {...}}
+        """
+        canvas = self._get_canvas(canvas_name)
+
+        # 校验 ID 唯一性
+        if node_id:
+            existing_ids = {n["id"] for n in canvas["nodes"]}
+            if node_id in existing_ids:
+                return {"success": False, "error": f"节点 ID 重复: 画布「{canvas['name']}」中已存在节点 '{node_id}'"}
+
+        # node_type → 内部映射
+        if node_type == "DataWorks":
+            data_origin = "DataWorks"
+            prefix = "dw"
+        else:
+            data_origin = "自定义"
+            prefix = "custom"
+
+        # 生成 ID
+        if node_id:
+            nid = node_id
+        else:
+            ts = int(time.time() * 1000)
+            nid = f"{prefix}_{ts}_{self._node_offset}"
+
+        # 计算坐标（边缘顺延算法）
+        if position:
+            x, y = position["x"], position["y"]
+        elif not canvas["nodes"]:
+            x, y = 200, 200
+        else:
+            existing = canvas["nodes"]
+            right_edge = max(
+                n["position"]["x"] + self._node_width(n)
+                for n in existing
+            )
+            rightmost = max(existing, key=lambda n: n["position"]["x"])
+            x = right_edge + 60
+            y = rightmost["position"]["y"] + self._node_offset * 100
+
+        self._node_offset += 1
+
+        new_node = {
+            "id": nid,
+            "type": "customNode",
+            "data": {
+                "label": node_name,
+                "origin": data_origin,
+                "comment": node_comment
+            },
+            "position": {"x": x, "y": y},
+            "deletable": True
+        }
+
+        canvas["nodes"].append(new_node)
+        self._save()
+
+        return {
+            "success": True,
+            "id": nid,
+            "node_name": node_name,
+            "node_type": node_type,
+            "node_comment": node_comment,
+            "position": {"x": x, "y": y}
+        }
+
+    def delete_node(self, canvas_name: str, node_id: str) -> dict:
+        """
+        删除指定节点，并级联删除所有关联的边。
+
+        返回值:
+          成功: {"success": True, "deleted_node": "...", "deleted_edges": 3}
+          失败: {"success": False, "error": "..."}
+        """
+        canvas = self._get_canvas(canvas_name)
+
+        # 检查节点是否存在
+        nm = self._node_map(canvas)
+        if node_id not in nm:
+            return {"success": False, "error": f"节点不存在: 画布「{canvas['name']}」中没有节点 '{node_id}'"}
+
+        # 级联删除关联边
+        before = len(canvas["edges"])
+        canvas["edges"] = [e for e in canvas["edges"]
+                           if e["source"] != node_id and e["target"] != node_id]
+        deleted_edges = before - len(canvas["edges"])
+
+        # 删除节点
+        canvas["nodes"] = [n for n in canvas["nodes"] if n["id"] != node_id]
+        self._save()
+
+        return {
+            "success": True,
+            "deleted_node": node_id,
+            "deleted_edges": deleted_edges
+        }
+
+    def update_node(self, canvas_name: str, node_id: str, *,
+                    node_name: str = "",
+                    node_type: str = "",
+                    node_comment: str = "") -> dict:
+        """
+        更新指定节点的属性。只传需要修改的字段，不传的保持不变。
+        node_id 为定位主键，不可修改。
+
+        返回值:
+          成功: {"success": True, "id": "...", "node_name": "...", "node_type": "...", "node_comment": "..."}
+          失败: {"success": False, "error": "..."}
+        """
+        canvas = self._get_canvas(canvas_name)
+
+        # 定位节点
+        nm = self._node_map(canvas)
+        if node_id not in nm:
+            return {"success": False, "error": f"节点不存在: 画布「{canvas['name']}」中没有节点 '{node_id}'"}
+
+        node = nm[node_id]
+
+        # 更新 node_name
+        if node_name:
+            node["data"]["label"] = node_name
+
+        # 更新 node_type
+        if node_type:
+            if node_type == "DataWorks":
+                node["data"]["origin"] = "DataWorks"
+            else:
+                node["data"]["origin"] = "自定义"
+
+        # 更新 node_comment（允许置空）
+        if node_comment:
+            node["data"]["comment"] = node_comment
+
+        self._save()
+
+        return {
+            "success": True,
+            "id": node_id,
+            "node_name": node["data"]["label"],
+            "node_type": node_type if node_type else ("DataWorks" if node["data"]["origin"] == "DataWorks" else "custom"),
+            "node_comment": node["data"]["comment"]
+        }
+
     # ── Mermaid 格式化（供 LLM 消费）─────────────────
 
     _LEGEND = (
@@ -354,6 +532,34 @@ def chain_to_mermaid(canvas_name: str, start_id: str, end_id: str, path: str = "
     return _get_hub(path).chain_to_mermaid(canvas_name, start_id, end_id)
 
 
+def add_node(canvas_name: str, node_name: str, *,
+             node_type: str = "custom",
+             node_comment: str = "",
+             node_id: str = "",
+             position: Optional[dict] = None,
+             path: str = "graph.json") -> dict:
+    """向指定画布添加节点（便捷函数）"""
+    return _get_hub(path).add_node(canvas_name, node_name,
+                                   node_type=node_type, node_comment=node_comment,
+                                   node_id=node_id, position=position)
+
+
+def delete_node(canvas_name: str, node_id: str, path: str = "graph.json") -> dict:
+    """删除指定节点及其关联边（便捷函数）"""
+    return _get_hub(path).delete_node(canvas_name, node_id)
+
+
+def update_node(canvas_name: str, node_id: str, *,
+                node_name: str = "",
+                node_type: str = "",
+                node_comment: str = "",
+                path: str = "graph.json") -> dict:
+    """更新指定节点属性（便捷函数）"""
+    return _get_hub(path).update_node(canvas_name, node_id,
+                                      node_name=node_name, node_type=node_type,
+                                      node_comment=node_comment)
+
+
 # ── 命令行测试入口 ──────────────────────────────────
 
 if __name__ == "__main__":
@@ -415,3 +621,56 @@ if __name__ == "__main__":
                 print(f"   路径节点数: {len(chain['nodes'])}  路径边数: {len(chain['edges'])}")
                 print(f"\n   --- mermaid ---")
                 print(chain["mermaid"])
+
+    # 6. add_node 测试
+    print("\n" + "=" * 60)
+    print("6. add_node() 测试")
+    print("=" * 60)
+
+    # 取第一个画布
+    name = canvases[0]["name"]
+
+    # 6a. 指定坐标添加
+    n1 = hub.add_node(name, "SDK写入-指定坐标", node_type="custom",
+                      node_comment="手动指定位置", position={"x": 50, "y": 50})
+    print(f"   [指定坐标] {json.dumps(n1, ensure_ascii=False)}")
+
+    # 6b. 不指定坐标（边缘顺延算法）
+    n2 = hub.add_node(name, "SDK写入-自动坐标1", node_type="DataWorks",
+                      node_comment="自动推到右边")
+    print(f"   [自动坐标1] {json.dumps(n2, ensure_ascii=False)}")
+
+    # 6c. 连续第二个（验证纵向错开）
+    n3 = hub.add_node(name, "SDK写入-自动坐标2", node_type="custom",
+                      node_comment="应该和上一个纵向错开")
+    print(f"   [自动坐标2] {json.dumps(n3, ensure_ascii=False)}")
+
+    # 6d. 自定义 ID
+    n4 = hub.add_node(name, "SDK写入-自定义ID", node_type="DataWorks",
+                      node_id="my_custom_id")
+    print(f"   [自定义ID]   {json.dumps(n4, ensure_ascii=False)}")
+
+    # 6e. ID 冲突测试 — 用 6a 返回的 ID 再写一次
+    conflict = hub.add_node(name, "冲突节点", node_id=n1["id"])
+    print(f"   [ID冲突]     {json.dumps(conflict, ensure_ascii=False)}")
+
+    # 验证：get_canvas 能看到新节点（冲突的那个不会写入）
+    canvas_after = hub.get_canvas(name)
+    print(f"\n   画布节点总数: {len(canvas_after['nodes'])}（含新加的 4 个，冲突的 1 个未写入）")
+
+    # 7. delete_node / update_node 测试
+    print("\n" + "=" * 60)
+    print("7. delete_node() / update_node() 测试")
+    print("=" * 60)
+
+    # 取 n4（自定义 ID 节点），先改一下
+    r1 = hub.update_node(name, n4["id"], node_name="改名后的节点", node_comment="被更新过")
+    print(f"   [更新]  {json.dumps(r1, ensure_ascii=False)}")
+
+    # 删除改名后的节点
+    r2 = hub.delete_node(name, n4["id"])
+    print(f"   [删除]  {json.dumps(r2, ensure_ascii=False)}")
+
+    # 删不存在的节点
+    r3 = hub.delete_node(name, "not_exist_id")
+    print(f"   [删不存在] {json.dumps(r3, ensure_ascii=False)}")
