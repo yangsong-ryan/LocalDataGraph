@@ -12,6 +12,10 @@ export async function saveGraph(graphData) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(graphData)
   })
+  if (res.status === 409) {
+    const err = await res.json()
+    throw new Error(err.error || '数据已被外部修改，请刷新页面')
+  }
   if (!res.ok) throw new Error('保存失败')
   return res.json()
 }

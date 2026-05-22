@@ -56,7 +56,8 @@ class LineageHub:
             self._name_to_id[c["name"]] = c["id"]
 
     def _save(self):
-        """将当前内存状态写回 graph.json"""
+        """将当前内存状态写回 graph.json（自动递增 version）"""
+        self._raw["version"] = self._raw.get("version", 1) + 1
         with open(self._graph_path, "w", encoding="utf-8") as f:
             json.dump(self._raw, f, ensure_ascii=False, indent=2)
 

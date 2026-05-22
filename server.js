@@ -16,7 +16,8 @@ function readGraph() {
   if (!existsSync(GRAPH_PATH)) {
     return {
       canvases: [{ id: 'canvas_default', name: '默认画布', nodes: [], edges: [] }],
-      activeCanvasId: 'canvas_default'
+      activeCanvasId: 'canvas_default',
+      version: 1
     }
   }
   const raw = JSON.parse(readFileSync(GRAPH_PATH, 'utf-8'))
@@ -24,9 +25,11 @@ function readGraph() {
   if (!raw.canvases) {
     return {
       canvases: [{ id: 'canvas_default', name: '默认画布', nodes: raw.nodes || [], edges: raw.edges || [] }],
-      activeCanvasId: 'canvas_default'
+      activeCanvasId: 'canvas_default',
+      version: raw.version || 1
     }
   }
+  if (!raw.version) raw.version = 1
   return raw
 }
 
@@ -39,15 +42,25 @@ app.get('/api/graph', (_req, res) => {
   res.json(readGraph())
 })
 
-// API: 保存图谱（全量覆盖）
+// API: 保存图谱（全量覆盖，版本校验）
 app.post('/api/save', (req, res) => {
-  const { canvases, activeCanvasId } = req.body
+  const { canvases, activeCanvasId, version } = req.body
   if (!Array.isArray(canvases)) {
     return res.status(400).json({ error: '数据格式错误：缺少 canvases 数组' })
   }
-  writeGraph({ canvases, activeCanvasId })
+
+  const current = readGraph()
+  if (version !== current.version) {
+    return res.status(409).json({
+      ok: false,
+      error: `数据已被外部修改（当前版本 ${current.version}，你的版本 ${version}），请刷新页面后再操作。`
+    })
+  }
+
+  const saved = { canvases, activeCanvasId, version: current.version + 1 }
+  writeGraph(saved)
   const canvas = canvases.find(c => c.id === activeCanvasId) || canvases[0]
-  res.json({ ok: true, canvasCount: canvases.length, nodeCount: canvas.nodes.length, edgeCount: canvas.edges.length })
+  res.json({ ok: true, canvasCount: canvases.length, nodeCount: canvas.nodes.length, edgeCount: canvas.edges.length, version: saved.version })
 })
 
 // 托管前端静态文件

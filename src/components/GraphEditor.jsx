@@ -27,8 +27,6 @@ function genId(prefix = 'node') {
   return `${prefix}_${Date.now()}_${idCounter++}`
 }
 
-const MAX_HISTORY = 50
-
 // ---------- 自定义连线（支持虚/实线）----------
 function StyledEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, data }) {
   const [edgePath] = getSmoothStepPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
@@ -90,19 +88,19 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
   const [saveStatus, setSaveStatus] = useState('')
   const [editingNode, setEditingNode] = useState(null)
   const [contextMenu, setContextMenu] = useState(null)
+  const [conflict, setConflict] = useState(null)
+  const conflictRef = useRef(null)
+  const conflictTimerRef = useRef(null)
 
-  const historyRef = useRef([])
-  const historyIndexRef = useRef(-1)
-  const skipHistoryRef = useRef(false)
   const autoSaveRef = useRef(null)
   const nodesRef = useRef(nodes)
   const edgesRef = useRef(edges)
 
-  // 始终保持 ref 与 state 同步
   nodesRef.current = nodes
   edgesRef.current = edges
 
   const scheduleAutoSave = useCallback(() => {
+    if (conflictRef.current) return
     if (autoSaveRef.current) clearTimeout(autoSaveRef.current)
     setSaveStatus('')
     autoSaveRef.current = setTimeout(async () => {
@@ -111,115 +109,67 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
         const cleanEdges = edgesRef.current.map(({ type, markerEnd, ...rest }) => rest)
         await onSave(nodesRef.current, cleanEdges)
         setSaveStatus('已自动保存 ' + new Date().toLocaleTimeString())
-      } catch {
-        setSaveStatus('自动保存失败')
+      } catch (e) {
+        const msg = e.message || '自动保存失败'
+        if (msg.includes('外部') || msg.includes('刷新')) {
+          conflictRef.current = true
+          setConflict(msg)
+          let count = 3
+          setSaveStatus(`数据版本冲突，${count} 秒后自动刷新...`)
+          conflictTimerRef.current = setInterval(() => {
+            count--
+            if (count <= 0) {
+              clearInterval(conflictTimerRef.current)
+              window.location.reload()
+            } else {
+              setSaveStatus(`数据版本冲突，${count} 秒后自动刷新...`)
+            }
+          }, 1000)
+        } else {
+          setSaveStatus(msg)
+        }
       }
-    }, 1500)
+    }, 800)
   }, [onSave])
 
   useEffect(() => {
-    return () => { if (autoSaveRef.current) clearTimeout(autoSaveRef.current) }
-  }, [])
-
-  const pushHistory = useCallback((nds, eds) => {
-    if (skipHistoryRef.current) return
-    const snap = { nodes: JSON.parse(JSON.stringify(nds)), edges: JSON.parse(JSON.stringify(eds)) }
-    const idx = historyIndexRef.current
-    historyRef.current = historyRef.current.slice(0, idx + 1)
-    historyRef.current.push(snap)
-    if (historyRef.current.length > MAX_HISTORY) historyRef.current.shift()
-    historyIndexRef.current = historyRef.current.length - 1
-  }, [])
-
-  const undo = useCallback(() => {
-    if (historyIndexRef.current <= 0) return
-    historyIndexRef.current--
-    const snap = historyRef.current[historyIndexRef.current]
-    skipHistoryRef.current = true
-    setNodes(snap.nodes)
-    setEdges(snap.edges)
-    setTimeout(() => { skipHistoryRef.current = false }, 0)
-    setSaveStatus('已撤回')
-    scheduleAutoSave()
-  }, [setNodes, setEdges, scheduleAutoSave])
-
-  const redo = useCallback(() => {
-    if (historyIndexRef.current >= historyRef.current.length - 1) return
-    historyIndexRef.current++
-    const snap = historyRef.current[historyIndexRef.current]
-    skipHistoryRef.current = true
-    setNodes(snap.nodes)
-    setEdges(snap.edges)
-    setTimeout(() => { skipHistoryRef.current = false }, 0)
-    setSaveStatus('已重做')
-    scheduleAutoSave()
-  }, [setNodes, setEdges, scheduleAutoSave])
-
-  useEffect(() => {
-    const handler = e => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-        e.preventDefault()
-        if (e.shiftKey) redo()
-        else undo()
-      }
+    return () => {
+      if (autoSaveRef.current) clearTimeout(autoSaveRef.current)
+      if (conflictTimerRef.current) clearInterval(conflictTimerRef.current)
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [undo, redo])
+  }, [])
 
   useEffect(() => {
     const nds = initialNodes.map(n => ({ ...n, deletable: true }))
     setNodes(nds)
     setEdges(initialEdges)
-    historyRef.current = []
-    historyIndexRef.current = -1
-    skipHistoryRef.current = true
-    setTimeout(() => {
-      pushHistory(nds, initialEdges)
-      skipHistoryRef.current = false
-    }, 100)
-  }, [initialNodes, initialEdges, setNodes, setEdges, pushHistory])
-
-  useEffect(() => {
-    if (historyRef.current.length === 0 && nodes.length >= 0) {
-      pushHistory(nodes, edges)
-    }
-  }, [])
+  }, [initialNodes, initialEdges, setNodes, setEdges])
 
   const onNodeDragStop = useCallback(() => {
-    pushHistory(nodes, edges)
     scheduleAutoSave()
-  }, [nodes, edges, pushHistory, scheduleAutoSave])
+  }, [scheduleAutoSave])
 
-  const onNodesDelete = useCallback((deleted) => {
-    pushHistory(
-      nodes.filter(n => !deleted.some(d => d.id === n.id)),
-      edges.filter(e => !deleted.some(d => d.id === e.source || d.id === e.target))
-    )
+  const onNodesDelete = useCallback(() => {
     scheduleAutoSave()
-  }, [nodes, edges, pushHistory, scheduleAutoSave])
+  }, [scheduleAutoSave])
 
-  const onEdgesDelete = useCallback((deleted) => {
-    pushHistory(nodes, edges.filter(e => !deleted.some(d => d.id === e.id)))
+  const onEdgesDelete = useCallback(() => {
     scheduleAutoSave()
-  }, [nodes, edges, pushHistory, scheduleAutoSave])
+  }, [scheduleAutoSave])
 
   const onConnect = useCallback(params => {
-    const newEdge = {
-      ...params,
-      label: '',
-      data: { lineStyle: 'solid' },
-      id: genId('e'),
-      markerEnd: { type: MarkerType.ArrowClosed }
-    }
     setEdges(eds => {
-      const next = addEdge(newEdge, eds)
-      pushHistory(nodes, next)
+      const next = addEdge({
+        ...params,
+        label: '',
+        data: { lineStyle: 'solid' },
+        id: genId('e'),
+        markerEnd: { type: MarkerType.ArrowClosed }
+      }, eds)
       return next
     })
     scheduleAutoSave()
-  }, [nodes, pushHistory, setEdges, scheduleAutoSave])
+  }, [setEdges, scheduleAutoSave])
 
   const onNodeDoubleClick = useCallback((_, node) => {
     setEditingNode({ id: node.id, label: node.data.label, comment: node.data.comment || '' })
@@ -235,27 +185,14 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
       return next
     })
     if (newId !== oldId) {
-      setEdges(eds => {
-        const next = eds.map(e => ({
-          ...e, source: e.source === oldId ? newId : e.source, target: e.target === oldId ? newId : e.target
-        }))
-        pushHistory(nodes.map(n => n.id === oldId ? { ...n, id: newId } : n), next)
-        return next
-      })
-    } else {
-      setNodes(nds => {
-        const next = nds.map(n =>
-          n.id === oldId ? { ...n, id: newId, data: { ...n.data, label: newLabel, comment: newComment } } : n
-        )
-        pushHistory(next, edges)
-        return next
-      })
+      setEdges(eds => eds.map(e => ({
+        ...e, source: e.source === oldId ? newId : e.source, target: e.target === oldId ? newId : e.target
+      })))
     }
     setEditingNode(null)
     scheduleAutoSave()
-  }, [editingNode, nodes, edges, pushHistory, setNodes, setEdges, scheduleAutoSave])
+  }, [editingNode, setNodes, setEdges, scheduleAutoSave])
 
-  // 右键连线 → 切换虚/实线
   const onEdgeContextMenu = useCallback((event, edge) => {
     event.preventDefault()
     setContextMenu({ x: event.clientX, y: event.clientY, edge })
@@ -268,11 +205,10 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
         const cur = e.data?.lineStyle || 'solid'
         return { ...e, data: { ...e.data, lineStyle: cur === 'dashed' ? 'solid' : 'dashed' } }
       })
-      pushHistory(nodes, next)
       return next
     })
     scheduleAutoSave()
-  }, [nodes, pushHistory, setEdges, scheduleAutoSave])
+  }, [setEdges, scheduleAutoSave])
 
   const addNode = useCallback(type => {
     const def = NODE_TYPES_CONFIG[type]
@@ -284,11 +220,10 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
         position: { x: Math.random() * 300 + 100, y: Math.random() * 300 + 100 },
         deletable: true
       }]
-      pushHistory(next, edges)
       return next
     })
     scheduleAutoSave()
-  }, [edges, pushHistory, setNodes, scheduleAutoSave])
+  }, [setNodes, scheduleAutoSave])
 
   const allNodeIds = nodes.map(n => n.id)
 
@@ -325,11 +260,6 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
             <button className="btn-add-custom" onClick={() => addNode('custom')}>
               + 自定义节点
             </button>
-            <span style={{ color: '#ccc', margin: '0 2px' }}>|</span>
-            <button onClick={undo} disabled={historyIndexRef.current <= 0} title="撤回 (Ctrl+Z)"
-              style={{ padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 }}>↩</button>
-            <button onClick={redo} disabled={historyIndexRef.current >= historyRef.current.length - 1} title="重做 (Ctrl+Shift+Z)"
-              style={{ padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'pointer', fontSize: 13 }}>↪</button>
           </div>
         </Panel>
       </ReactFlow>
@@ -348,7 +278,34 @@ export default function GraphEditor({ nodes: initialNodes, edges: initialEdges, 
         />
       )}
 
-      <div className="status-bar">{saveStatus}</div>
+      {conflict && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,.5)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', zIndex: 99999
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 8, padding: 32,
+            maxWidth: 480, textAlign: 'center', boxShadow: '0 8px 32px rgba(0,0,0,.3)'
+          }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: '#e53935' }}>
+              数据版本冲突
+            </div>
+            <div style={{ fontSize: 13, color: '#666', marginBottom: 8, lineHeight: 1.6 }}>
+              {conflict}
+            </div>
+            <div style={{ fontSize: 12, color: '#999' }}>
+              页面将在 3 秒后自动刷新...
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="status-bar"
+        style={saveStatus.includes('外部') || saveStatus.includes('失败') || saveStatus.includes('冲突') ? { color: '#e53935', fontWeight: 700 } : {}}>
+        {saveStatus}
+      </div>
     </div>
   )
 }

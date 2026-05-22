@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { fetchGraph, saveGraph } from './api'
 import TabBar from './components/TabBar'
 import GraphEditor from './components/GraphEditor'
@@ -21,11 +21,14 @@ export default function App() {
   const [canvases, setCanvases] = useState([DEFAULT_CANVAS])
   const [activeId, setActiveId] = useState(DEFAULT_CANVAS.id)
   const [loaded, setLoaded] = useState(false)
+  const versionRef = useRef(1)
 
   // 初始化加载
   useEffect(() => {
     fetchGraph()
       .then(data => {
+        const v = data.version || 1
+        versionRef.current = v
         if (data.canvases && data.canvases.length > 0) {
           setCanvases(data.canvases)
           setActiveId(data.activeCanvasId || data.canvases[0].id)
@@ -39,7 +42,8 @@ export default function App() {
 
   // 全量保存
   const save = useCallback(async (newCanvases, newActiveId) => {
-    await saveGraph({ canvases: newCanvases, activeCanvasId: newActiveId })
+    const result = await saveGraph({ canvases: newCanvases, activeCanvasId: newActiveId, version: versionRef.current })
+    versionRef.current = result.version
   }, [])
 
   // 保存当前画布的节点和边
@@ -48,7 +52,8 @@ export default function App() {
       c.id === activeId ? { ...c, nodes, edges } : c
     )
     setCanvases(updated)
-    await saveGraph({ canvases: updated, activeCanvasId: activeId })
+    const result = await saveGraph({ canvases: updated, activeCanvasId: activeId, version: versionRef.current })
+    versionRef.current = result.version
   }, [canvases, activeId])
 
   // 切换画布
@@ -94,7 +99,7 @@ export default function App() {
       <div className="toolbar">
         <Logo size={28} />
         <h1>DataWorks 血缘影子中枢</h1>
-        <span style={{ fontSize: 12, opacity: 0.7 }}>双击节点编辑 | 右键连线切换虚/实线 | Shift+框选多节点拖拽 | Ctrl+Z 撤回 | 双击画布名重命名</span>
+        <span style={{ fontSize: 12, opacity: 0.7 }}>双击节点编辑 | 右键连线切换虚/实线 | Shift+框选多节点拖拽 | 双击画布名重命名</span>
       </div>
       <TabBar
         canvases={canvases}
